@@ -23,6 +23,7 @@ void *sumfunc(void *args)
 	for (i = myargs->first; i < myargs->last; i++)
 	{
 		s0 += arr[i];
+		myargs->result += arr[i];
 	}
 	return NULL;
 }
@@ -43,10 +44,10 @@ void multiSum()
 	pthread_join(th1, NULL);
 	pthread_join(th2, NULL);
 
-	// printf("s1 %d \n", args1.result);
-	// printf("s2 %d \n", args2.result);
-	// printf("s1 + s2 %d \n", args1.result + args2.result);
-	printf("s1 + s2 %d \n", s0);
+	printf("s1 %ld \n", args1.result);
+	printf("s2 %ld \n", args2.result);
+	printf("s1 + s2 %ld \n", args1.result + args2.result);
+	printf("s1 + s2 %ld \n", s0);
 	return;
 }
 
@@ -84,6 +85,6 @@ void multi_lock()
 	pthread_join(th1, NULL);
 	pthread_join(th2, NULL);
 
-	printf("%d\n", s);
+	printf("%ld\n", s);
 	return;
 }

@@ -126,9 +126,11 @@ void zthread::test_BugsOfDetach()
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #include <list>
+#include <mutex>
 #include <vector>
 
 using std::list;
+using std::mutex;
 using std::vector;
 
 void FunctionThreads(int tid)
@@ -163,31 +165,49 @@ void FunctionDataR()
 class CMsgQueue
 {
   private:
-    list<int> MsgQueue;
+    static list<int> MsgQueue;
+    static mutex mutexMsgQueue;
 
   public:
-    CMsgQueue(/* args */){};
+    CMsgQueue(){};
     ~CMsgQueue(){};
     void Push()
     {
-        for (size_t i = 0; i < 10; i++)
-        {
-            cout << "4.2 Push\t Data\t" << i << "\tId " << get_id() << endl;
-            MsgQueue.push_back(i);
-        }
-    }
-    void Pop()
-    { 
         for (size_t i = 0; i < 10000; i++)
         {
-            if (!MsgQueue.empty())
+            mutexMsgQueue.lock();
+            cout << "4.2 Push\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
+            MsgQueue.push_back(i);
+            mutexMsgQueue.unlock();
+        }
+    }
+    bool Pop_mutex(int &n)
+    {
+        std::lock_guard<mutex> lock_guardMsgQueue(mutexMsgQueue);
+        if (!MsgQueue.empty())
+        {
+            n = MsgQueue.front();
+            MsgQueue.pop_front();
+            return true;
+        }
+        return false;
+    }
+    void Pop()
+    {
+        for (size_t i = 0; i < 10000; i++)
+        {
+            int nData = 0;
+            mutexMsgQueue.lock();
+            if (Pop_mutex(nData) == true)
             {
-                cout << "4.2 Pop\t Data\t" << MsgQueue.front() << "\tId " << get_id() << endl;
-                MsgQueue.pop_front();
+                cout << "4.2 Pop \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
             }
+            mutexMsgQueue.unlock();
         }
     }
 };
+list<int> CMsgQueue::MsgQueue;
+mutex CMsgQueue::mutexMsgQueue;
 void zthread::test_DataSharing()
 {
     cout << "4.1 Read Only" << endl;
@@ -204,13 +224,13 @@ void zthread::test_DataSharing()
         }
         cout << "4.1 Main Thread\t Id " << get_id() << endl;
     }
-
-    cout << "4.2 Read and Write" << endl;
+    cout << "4.2 Read and Write with Lock" << endl;
     {
         CMsgQueue objMsgQueue;
         thread thRecv(&CMsgQueue::Push, objMsgQueue);
-        thRecv.join();
         thread thAns(&CMsgQueue::Pop, objMsgQueue);
+        thRecv.join();
         thAns.join();
+        cout << "4.2 Main Thread\t Id " << get_id() << endl;
     }
 }
