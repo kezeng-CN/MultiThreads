@@ -130,6 +130,7 @@ void zthread::test_BugsOfDetach()
 #include <vector>
 
 using std::list;
+using std::lock;
 using std::mutex;
 using std::vector;
 
@@ -166,24 +167,74 @@ class CMsgQueue
 {
   private:
     static list<int> MsgQueue;
-    static mutex mutexMsgQueue;
+    static mutex mutexMsgQueue1;
+    static mutex mutexMsgQueue2;
 
   public:
     CMsgQueue(){};
     ~CMsgQueue(){};
-    void Push()
+    void Recv()
     {
-        for (size_t i = 0; i < 10000; i++)
+        for (size_t i = 0; i < 100000; i++)
         {
-            mutexMsgQueue.lock();
+            mutexMsgQueue1.lock();
+            mutexMsgQueue2.lock();
+            // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
+            std::chrono::milliseconds sleep5s(10);
+            std::this_thread::sleep_for(sleep5s);
             cout << "4.2 Push\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
             MsgQueue.push_back(i);
-            mutexMsgQueue.unlock();
+            mutexMsgQueue1.unlock();
+            mutexMsgQueue2.unlock();
         }
     }
+    void Ans()
+    {
+        for (size_t i = 0; i < 100000; i++)
+        {
+            int nData = 0;
+            // mutexMsgQueue.lock();
+            if (Pop_mutex(nData) == true)
+            {
+                cout << "4.2 Pop \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
+            }
+            // mutexMsgQueue.unlock();
+        }
+    }
+#define Z_MULTI_TEST_LOCK_TYPE 5
+    // 1.lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
+    // 2.lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
+    // 3.unique_lock默认使用跟lock_guard一致
+    // 4.unique_lock使用std::adopt跟lock_guard一致
+    // 5.unique_lock使用try_to_lock
     bool Pop_mutex(int &n)
     {
-        std::lock_guard<mutex> lock_guardMsgQueue(mutexMsgQueue);
+#if Z_MULTI_TEST_LOCK_TYPE == 1
+        std::lock_guard<mutex> lock_guardMsgQueue1(mutexMsgQueue1);
+        std::lock_guard<mutex> lock_guardMsgQueue2(mutexMsgQueue2);
+#elif Z_MULTI_TEST_LOCK_TYPE == 2
+        lock(mutexMsgQueue1, mutexMsgQueue2);
+        std::lock_guard<mutex>(mutexMsgQueue1, std::adopt_lock);
+        std::lock_guard<mutex>(mutexMsgQueue2, std::adopt_lock);
+#elif Z_MULTI_TEST_LOCK_TYPE == 3
+        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1);
+        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2);
+#elif Z_MULTI_TEST_LOCK_TYPE == 4
+        lock(mutexMsgQueue1, mutexMsgQueue2);
+        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1, std::adopt_lock);
+        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2, std::adopt_lock);
+#elif Z_MULTI_TEST_LOCK_TYPE == 5
+        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1, std::try_to_lock);
+        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2, std::try_to_lock);
+        if (!(unique_lockMsgQueue1.owns_lock() == true && unique_lockMsgQueue2.owns_lock() == true))
+        {
+            cout << "4.2 Locked \t Addr\t" << this << "\tData\t"
+                 << "ERROR"
+                 << "\tId " << get_id() << endl;
+            return false;
+        }
+
+#endif
         if (!MsgQueue.empty())
         {
             n = MsgQueue.front();
@@ -192,22 +243,10 @@ class CMsgQueue
         }
         return false;
     }
-    void Pop()
-    {
-        for (size_t i = 0; i < 10000; i++)
-        {
-            int nData = 0;
-            mutexMsgQueue.lock();
-            if (Pop_mutex(nData) == true)
-            {
-                cout << "4.2 Pop \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
-            }
-            mutexMsgQueue.unlock();
-        }
-    }
 };
 list<int> CMsgQueue::MsgQueue;
-mutex CMsgQueue::mutexMsgQueue;
+mutex CMsgQueue::mutexMsgQueue1;
+mutex CMsgQueue::mutexMsgQueue2;
 void zthread::test_DataSharing()
 {
     cout << "4.1 Read Only" << endl;
@@ -227,10 +266,14 @@ void zthread::test_DataSharing()
     cout << "4.2 Read and Write with Lock" << endl;
     {
         CMsgQueue objMsgQueue;
-        thread thRecv(&CMsgQueue::Push, objMsgQueue);
-        thread thAns(&CMsgQueue::Pop, objMsgQueue);
+        thread thRecv(&CMsgQueue::Recv, objMsgQueue);
+        thread thAns(&CMsgQueue::Ans, objMsgQueue);
         thRecv.join();
         thAns.join();
         cout << "4.2 Main Thread\t Id " << get_id() << endl;
+    }
+    cout << "4.3 Tips of Dead Lock" << endl;
+    {
+        vector<vector<int>> v;
     }
 }
