@@ -10,6 +10,7 @@ int main()
 	zthread::test_BugsOfDetach();
 	zthread::test_Threads();
 	zthread::test_DataSharing();
+	zthread::test_Singleton();
 
 	return 0;
 }

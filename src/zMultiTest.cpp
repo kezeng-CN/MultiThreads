@@ -307,21 +307,65 @@ void zthread::test_DataSharing()
 class CSingleton
 {
   private:
-    CSingleton() {}
+    CSingleton() { cout << "5.1 Singleton \t Addr\t" << this << "\tObject\t" << pSingleton << "\tId " << get_id() << endl; }
     static CSingleton *pSingleton;
+    static mutex mutexCreation;
+    static std::once_flag once_flagCreation;
+    class CFixMemLeak
+    {
+      public:
+        ~CFixMemLeak()
+        {
+            if (nullptr != pSingleton)
+            {
+                delete (pSingleton);
+            }
+        }
+    };
+
   public:
     static CSingleton *getInstance()
     {
-        if (nullptr == pSingleton) {
-            pSingleton = new CSingleton();
+        if (nullptr == pSingleton)
+        {
+            std::unique_lock<mutex> unique_lockCreation(mutexCreation);
+            if (nullptr == pSingleton)
+            {
+                pSingleton = new CSingleton();
+                static CFixMemLeak objFixMemLeak;
+            }
         }
         return pSingleton;
     }
+    static void Creation()
+    {
+        if (nullptr == pSingleton)
+        {
+            pSingleton = new CSingleton();
+            static CFixMemLeak objFixMemLeak;
+        }
+    }
+    static CSingleton *getInstanceCallOnce()
+    {
+        std::call_once(once_flagCreation, Creation);
+        return pSingleton;
+    }
 };
-CSingleton* CSingleton::pSingleton = nullptr;
+CSingleton *CSingleton::pSingleton = nullptr;
+mutex CSingleton::mutexCreation;
+std::once_flag CSingleton::once_flagCreation;
+
+void function_singleton()
+{
+    // CSingleton *pSingleton = CSingleton::getInstance();
+    CSingleton *pSingleton = CSingleton::getInstanceCallOnce();
+}
 
 void zthread::test_Singleton()
 {
-    CSingleton* pSingleton = CSingleton::getInstance();
+    thread objThd1(function_singleton);
+    thread objThd2(function_singleton);
+    objThd1.join();
+    objThd2.join();
     return;
 }
