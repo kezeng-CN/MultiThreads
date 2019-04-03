@@ -169,6 +169,7 @@ class CMsgQueue
     static list<int> MsgQueue;
     static mutex mutexMsgQueue1;
     static mutex mutexMsgQueue2;
+    static long nSum;
 
   public:
     CMsgQueue(){};
@@ -179,10 +180,9 @@ class CMsgQueue
         {
             mutexMsgQueue1.lock();
             mutexMsgQueue2.lock();
-            // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
-            std::chrono::milliseconds sleep5s(10);
-            std::this_thread::sleep_for(sleep5s);
-            cout << "4.2 Push\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
+            // std::chrono::milliseconds sleep5s(5000);
+            // std::this_thread::sleep_for(sleep5s);
+            cout << "4.2 PushDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
             MsgQueue.push_back(i);
             mutexMsgQueue1.unlock();
             mutexMsgQueue2.unlock();
@@ -193,20 +193,24 @@ class CMsgQueue
         for (size_t i = 0; i < 100000; i++)
         {
             int nData = 0;
-            // mutexMsgQueue.lock();
+            // mutexMsgQueue1.lock();
+            // mutexMsgQueue2.lock();
             if (Pop_mutex(nData) == true)
-            {
-                cout << "4.2 Pop \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
-            }
-            // mutexMsgQueue.unlock();
+                cout << "4.2 PopDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+            else
+                cout << "4.2 PopEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+            // mutexMsgQueue1.unlock();
+            // mutexMsgQueue2.unlock();
         }
     }
-#define Z_MULTI_TEST_LOCK_TYPE 5
+#define Z_MULTI_TEST_LOCK_TYPE 7
     // 1.lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
     // 2.lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
     // 3.unique_lock默认使用跟lock_guard一致
-    // 4.unique_lock使用std::adopt跟lock_guard一致
-    // 5.unique_lock使用try_to_lock
+    // 4.unique_lock使用std::adopt，mutex需要lock，跟lock_guard一致
+    // 5.unique_lock使用std::try_to_lock，mutex不能lock
+    // 6.unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
+    // 7.unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
     bool Pop_mutex(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
@@ -214,6 +218,7 @@ class CMsgQueue
         std::lock_guard<mutex> lock_guardMsgQueue2(mutexMsgQueue2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 2
         lock(mutexMsgQueue1, mutexMsgQueue2);
+        // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
         std::lock_guard<mutex>(mutexMsgQueue1, std::adopt_lock);
         std::lock_guard<mutex>(mutexMsgQueue2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 3
@@ -228,25 +233,48 @@ class CMsgQueue
         std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2, std::try_to_lock);
         if (!(unique_lockMsgQueue1.owns_lock() == true && unique_lockMsgQueue2.owns_lock() == true))
         {
-            cout << "4.2 Locked \t Addr\t" << this << "\tData\t"
-                 << "ERROR"
+            cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
                  << "\tId " << get_id() << endl;
             return false;
         }
-
+#elif Z_MULTI_TEST_LOCK_TYPE == 6
+        std::unique_lock<mutex> defer_lockMsgQueue1(mutexMsgQueue1, std::defer_lock);
+        std::unique_lock<mutex> defer_lockMsgQueue2(mutexMsgQueue1, std::defer_lock);
+        defer_lockMsgQueue1.lock();
+        if (true == defer_lockMsgQueue2.try_lock()) // 类似std::try_to_lock
+        {
+            cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
+                 << "\tId " << get_id() << endl;
+            defer_lockMsgQueue1.unlock();
+        }
+#elif Z_MULTI_TEST_LOCK_TYPE == 7
+        std::unique_lock<mutex> unique_lockMsgQueue1 = move_mutex(mutexMsgQueue1);
+        std::unique_lock<mutex> unique_lockMsgQueue2(std::move(unique_lockMsgQueue1));
+        mutex *pMutexMsgQueue2 = unique_lockMsgQueue2.release();
 #endif
-        if (!MsgQueue.empty())
+        nSum++;
+        bool bRet = MsgQueue.empty();
+        if (bRet != true)
         {
             n = MsgQueue.front();
             MsgQueue.pop_front();
-            return true;
         }
-        return false;
+#if Z_MULTI_TEST_LOCK_TYPE == 7
+        pMutexMsgQueue2->unlock();
+#endif
+        return !bRet;
+    }
+    std::unique_lock<mutex> move_mutex(mutex &m)
+    {
+        // 生成临时unique_lock对象，并调用unique_lock的移动构造函数
+        return std::unique_lock<mutex>(m);
     }
 };
 list<int> CMsgQueue::MsgQueue;
 mutex CMsgQueue::mutexMsgQueue1;
 mutex CMsgQueue::mutexMsgQueue2;
+long CMsgQueue::nSum = 0;
+
 void zthread::test_DataSharing()
 {
     cout << "4.1 Read Only" << endl;
@@ -272,8 +300,28 @@ void zthread::test_DataSharing()
         thAns.join();
         cout << "4.2 Main Thread\t Id " << get_id() << endl;
     }
-    cout << "4.3 Tips of Dead Lock" << endl;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------------------
+
+class CSingleton
+{
+  private:
+    CSingleton() {}
+    static CSingleton *pSingleton;
+  public:
+    static CSingleton *getInstance()
     {
-        vector<vector<int>> v;
+        if (nullptr == pSingleton) {
+            pSingleton = new CSingleton();
+        }
+        return pSingleton;
     }
+};
+CSingleton* CSingleton::pSingleton = nullptr;
+
+void zthread::test_Singleton()
+{
+    CSingleton* pSingleton = CSingleton::getInstance();
+    return;
 }
