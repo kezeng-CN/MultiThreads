@@ -30,21 +30,19 @@ void Funtion()
 void zthread::test_Creation()
 {
     cout << "1.1 Create by Function" << endl;
-    thread objThred1(Funtion);
-    objThred1.join();
+    thread th1(Funtion);
+    th1.join();
     cout << "1.2 Create by Functor" << endl;
-    thread objThred2(Functor(12));
-    objThred2.join();
+    thread th2(Functor(12));
+    th2.join();
     cout << "1.3 Create by Lambda" << endl;
-    auto LambdaTH = [] {
-        cout << "1.3 Lambda Start" << endl;
-    };
-    thread objThred3(LambdaTH);
-    objThred3.join();
+    auto LambdaTH = [] { cout << "1.3 Lambda Start" << endl; };
+    thread th3(LambdaTH);
+    th3.join();
     cout << "1.4 Create by MemberFunction" << endl;
     Functor objFunctor(0);
-    thread objThred4(&Functor::MemberFunction, objFunctor, 14);
-    objThred4.join();
+    thread th4(&Functor::MemberFunction, objFunctor, 14);
+    th4.join();
 }
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -95,34 +93,35 @@ void zthread::test_BugsOfDetach()
         char cStr[] = {"2.1"};
         cout << "2.1 MainNum\t Addr\t" << &nNum << "\tData\t" << nNum << "\tId " << get_id() << endl;
         cout << "2.1 MainArry\t Addr\t" << &cStr << "\tData\t" << cStr << "\tId " << get_id() << endl;
-        thread objThred1(FunctionPassbyFalseRef, nNum, cStr); //1 ①引用传递参数(VS会进行一次拷贝 GNU C会进行两次拷贝) ②引用传递指针（）
-        objThred1.join();
+        thread th1(FunctionPassbyFalseRef, nNum, cStr); //1 ①引用传递参数(VS会进行一次拷贝 GNU C会进行两次拷贝) ②引用传递指针（）
+        th1.join();
     }
 
     cout << "2.2 Pass Arguement by Parameterized Constructor" << endl;
     {
         CArgMutable objArgMutable(22);
-        thread objThred2(FunctionPassbyObj, 22); //2 不要用隐式类型转换
+        thread th2(FunctionPassbyObj, 22); //2 不要用隐式类型转换
         cout << "2.2 Main Thread\t Addr\t" << &objArgMutable << "\tData\t" << objArgMutable.nData << "\tId " << get_id() << endl;
-        objThred2.join();
+        th2.join();
     }
 
     cout << "2.3 Pass Arguement by Reference" << endl;
     {
         CArgUnMut objArgUnMut(23);
-        thread objThred3(FunctionPassbyRef, std::ref(objArgUnMut)); //3 通过引用传递的参数使用std::ref函数，线程接收参数是实际地址
+        thread th3(FunctionPassbyRef, std::ref(objArgUnMut)); //3 通过引用传递的参数使用std::ref函数，线程接收参数是实际地址
         cout << "2.3 Main Thread\t Addr\t" << &objArgUnMut << "\tData\t" << objArgUnMut.nData << "\tId " << get_id() << endl;
-        objThred3.join();
+        th3.join();
     }
 
     cout << "2.4 Pass Smart Pointer as Arguement" << endl;
     {
         unique_ptr<int> pNum(new int(24));
         cout << "2.4 Main Thread\t Addr\t" << &pNum << "\tData\t" << *pNum << "\tId " << get_id() << endl;
-        thread objThred4(FunctionPassbySmartPtr, std::move(pNum));
-        objThred4.join();
+        thread th4(FunctionPassbySmartPtr, std::move(pNum));
+        th4.join();
     }
 }
+
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #include <list>
@@ -163,44 +162,44 @@ void FunctionDataR()
     cout << "4.1 Threads\t Read\t" << nReadOnly << "\tId " << get_id() << endl;
 }
 
-class CMsgQueue
+class CNumList
 {
   private:
-    static list<int> MsgQueue;
-    static mutex mutexMsgQueue1;
-    static mutex mutexMsgQueue2;
+    static list<int> NumList;
+    static mutex mutexNumList1;
+    static mutex mutexNumList2;
     static long nSum;
 
   public:
-    CMsgQueue(){};
-    ~CMsgQueue(){};
-    void Recv()
+    CNumList(){};
+    ~CNumList(){};
+    void push()
     {
         for (size_t i = 0; i < 100000; i++)
         {
-            mutexMsgQueue1.lock();
-            mutexMsgQueue2.lock();
-            // std::chrono::milliseconds sleep5s(5000);
-            // std::this_thread::sleep_for(sleep5s);
+            mutexNumList1.lock();
+            mutexNumList2.lock();
+            // std::chrono::milliseconds sec5(5000);
+            // std::this_thread::sleep_for(sec5);
             cout << "4.2 PushDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
-            MsgQueue.push_back(i);
-            mutexMsgQueue1.unlock();
-            mutexMsgQueue2.unlock();
+            NumList.push_back(i);
+            mutexNumList1.unlock();
+            mutexNumList2.unlock();
         }
     }
-    void Ans()
+    void pop()
     {
         for (size_t i = 0; i < 100000; i++)
         {
             int nData = 0;
-            // mutexMsgQueue1.lock();
-            // mutexMsgQueue2.lock();
-            if (Pop_mutex(nData) == true)
+            // mutexNumList1.lock();
+            // mutexNumList2.lock();
+            if (pop_delegation(nData) == true)
                 cout << "4.2 PopDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
             else
                 cout << "4.2 PopEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
-            // mutexMsgQueue1.unlock();
-            // mutexMsgQueue2.unlock();
+            // mutexNumList1.unlock();
+            // mutexNumList2.unlock();
         }
     }
 #define Z_MULTI_TEST_LOCK_TYPE 7
@@ -211,58 +210,58 @@ class CMsgQueue
     // 5.unique_lock使用std::try_to_lock，mutex不能lock
     // 6.unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
     // 7.unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
-    bool Pop_mutex(int &n)
+    bool pop_delegation(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
-        std::lock_guard<mutex> lock_guardMsgQueue1(mutexMsgQueue1);
-        std::lock_guard<mutex> lock_guardMsgQueue2(mutexMsgQueue2);
+        std::lock_guard<mutex> lock_guardNumList1(mutexNumList1);
+        std::lock_guard<mutex> lock_guardNumList2(mutexNumList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 2
-        lock(mutexMsgQueue1, mutexMsgQueue2);
+        lock(mutexNumList1, mutexNumList2);
         // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
-        std::lock_guard<mutex>(mutexMsgQueue1, std::adopt_lock);
-        std::lock_guard<mutex>(mutexMsgQueue2, std::adopt_lock);
+        std::lock_guard<mutex>(mutexNumList1, std::adopt_lock);
+        std::lock_guard<mutex>(mutexNumList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 3
-        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1);
-        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2);
+        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1);
+        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 4
-        lock(mutexMsgQueue1, mutexMsgQueue2);
-        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1, std::adopt_lock);
-        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2, std::adopt_lock);
+        lock(mutexNumList1, mutexNumList2);
+        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::adopt_lock);
+        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 5
-        std::unique_lock<mutex> unique_lockMsgQueue1(mutexMsgQueue1, std::try_to_lock);
-        std::unique_lock<mutex> unique_lockMsgQueue2(mutexMsgQueue2, std::try_to_lock);
-        if (!(unique_lockMsgQueue1.owns_lock() == true && unique_lockMsgQueue2.owns_lock() == true))
+        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::try_to_lock);
+        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::try_to_lock);
+        if (!(unique_lockNumList1.owns_lock() == true && unique_lockNumList2.owns_lock() == true))
         {
             cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
                  << "\tId " << get_id() << endl;
             return false;
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 6
-        std::unique_lock<mutex> defer_lockMsgQueue1(mutexMsgQueue1, std::defer_lock);
-        std::unique_lock<mutex> defer_lockMsgQueue2(mutexMsgQueue1, std::defer_lock);
-        defer_lockMsgQueue1.lock();
-        if (true == defer_lockMsgQueue2.try_lock()) // 类似std::try_to_lock
+        std::unique_lock<mutex> defer_lockNumList1(mutexNumList1, std::defer_lock);
+        std::unique_lock<mutex> defer_lockNumList2(mutexNumList1, std::defer_lock);
+        defer_lockNumList1.lock();
+        if (true == defer_lockNumList2.try_lock()) // 类似std::try_to_lock
         {
             cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
                  << "\tId " << get_id() << endl;
-            defer_lockMsgQueue1.unlock();
+            defer_lockNumList1.unlock();
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 7
-        std::unique_lock<mutex> unique_lockMsgQueue1 = move_mutex(mutexMsgQueue1);
-        std::unique_lock<mutex> unique_lockMsgQueue2(std::move(unique_lockMsgQueue1));
-        mutex *pMutexMsgQueue2 = unique_lockMsgQueue2.release();
+        std::unique_lock<mutex> unique_lockNumList1 = move_mutex(mutexNumList1);
+        std::unique_lock<mutex> unique_lockNumList2(std::move(unique_lockNumList1));
+        mutex *pMutexNumList2 = unique_lockNumList2.release();
 #endif
         nSum++;
-        bool bRet = MsgQueue.empty();
-        if (bRet != true)
+        bool bEmpty = NumList.empty();
+        if (bEmpty != true)
         {
-            n = MsgQueue.front();
-            MsgQueue.pop_front();
+            n = NumList.front();
+            NumList.pop_front();
         }
 #if Z_MULTI_TEST_LOCK_TYPE == 7
-        pMutexMsgQueue2->unlock();
+        pMutexNumList2->unlock();
 #endif
-        return !bRet;
+        return !bEmpty;
     }
     std::unique_lock<mutex> move_mutex(mutex &m)
     {
@@ -270,10 +269,10 @@ class CMsgQueue
         return std::unique_lock<mutex>(m);
     }
 };
-list<int> CMsgQueue::MsgQueue;
-mutex CMsgQueue::mutexMsgQueue1;
-mutex CMsgQueue::mutexMsgQueue2;
-long CMsgQueue::nSum = 0;
+list<int> CNumList::NumList;
+mutex CNumList::mutexNumList1;
+mutex CNumList::mutexNumList2;
+long CNumList::nSum = 0;
 
 void zthread::test_DataSharing()
 {
@@ -293,11 +292,11 @@ void zthread::test_DataSharing()
     }
     cout << "4.2 Read and Write with Lock" << endl;
     {
-        CMsgQueue objMsgQueue;
-        thread thRecv(&CMsgQueue::Recv, objMsgQueue);
-        thread thAns(&CMsgQueue::Ans, objMsgQueue);
+        CNumList objNumList;
+        thread thRecv(&CNumList::push, objNumList);
+        thread thSend(&CNumList::pop, objNumList);
         thRecv.join();
-        thAns.join();
+        thSend.join();
         cout << "4.2 Main Thread\t Id " << get_id() << endl;
     }
 }
@@ -363,9 +362,80 @@ void function_singleton()
 
 void zthread::test_Singleton()
 {
+    cout << "5.1 Singleton\t Id " << get_id() << endl;
     thread objThd1(function_singleton);
     thread objThd2(function_singleton);
     objThd1.join();
     objThd2.join();
     return;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#include <condition_variable>
+#include <queue>
+
+using std::queue;
+class CNumQueue
+{
+  private:
+    static queue<int> NumQueue;
+    static mutex mtxNumQueue;
+    static std::condition_variable cvNumQueue;
+
+  public:
+    void push_notify_one()
+    {
+        for (size_t i = 0; i < 10000; i++)
+        {
+            std::unique_lock<mutex> uNumQueue(mtxNumQueue);
+            NumQueue.push(i);
+            cout << "6.1 PushDone \t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
+            cvNumQueue.notify_all();
+        }
+    }
+    void pop_wait()
+    {
+        for (;;)
+        {
+            std::unique_lock<mutex> uNumQueue(mtxNumQueue);
+            cvNumQueue.wait(uNumQueue, [this] { return !NumQueue.empty(); });
+            cout << "6.1 PopDone \t Addr\t" << this << "\tData\t" << NumQueue.front() << "\tId " << get_id() << endl;
+            NumQueue.pop();
+        }
+    }
+};
+queue<int> CNumQueue::NumQueue;
+mutex CNumQueue::mtxNumQueue;
+std::condition_variable CNumQueue::cvNumQueue;
+
+void zthread::test_Condition_Variable()
+{
+    CNumQueue objNumQueue;
+    thread thPush(CNumQueue::push_notify_one, objNumQueue);
+    thread thPop1(CNumQueue::pop_wait, objNumQueue);
+    thread thPop2(CNumQueue::pop_wait, objNumQueue);
+    thPush.join();
+    thPop1.join();
+    thPop2.join();
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#include <future>
+
+int future()
+{
+    cout << "7.1 Future Beg\t Data\t" << 1 << "\tId " << get_id() << endl;
+    std::chrono::milliseconds sec5(5000);
+    std::this_thread::sleep_for(sec5);
+    cout << "7.1 Future End\t Data\t" << 2 << "\tId " << get_id() << endl;
+    return 3;
+}
+
+void zthread::test_Future()
+{
+    std::future<int> fResult = std::async(future);
+    int nResult = fResult.get();
+    cout << "7.1 Main Thread\t Data\t" << nResult << "\tId " << get_id() << endl;
 }
