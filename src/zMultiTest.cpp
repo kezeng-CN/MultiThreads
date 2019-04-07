@@ -424,18 +424,78 @@ void zthread::test_Condition_Variable()
 
 #include <future>
 
-int future()
+int future(int n)
 {
-    cout << "7.1 Future Beg\t Data\t" << 1 << "\tId " << get_id() << endl;
+    cout << "7.X Future Beg\t Data\t" << n << "\tId " << get_id() << endl;
     std::chrono::milliseconds sec5(5000);
-    std::this_thread::sleep_for(sec5);
-    cout << "7.1 Future End\t Data\t" << 2 << "\tId " << get_id() << endl;
-    return 3;
+    // std::this_thread::sleep_for(sec5);
+    cout << "7.X Future End\t Data\t" << n << "\tId " << get_id() << endl;
+    return n;
+}
+
+void PromiseSet(std::promise<int> &pms, int n)
+{
+    cout << "7.4 Future Set\t Data\t" << n << "\tId " << get_id() << endl;
+    pms.set_value(n);
+}
+
+void PromiseGet(std::promise<int> &pms)
+{
+    auto fPromise = pms.get_future();
+    int n = fPromise.get();
+    cout << "7.4 Future Get\t Data\t" << n << "\tId " << get_id() << endl;
 }
 
 void zthread::test_Future()
 {
-    std::future<int> fResult = std::async(future);
-    int nResult = fResult.get();
-    cout << "7.1 Main Thread\t Data\t" << nResult << "\tId " << get_id() << endl;
+    cout << "7.1 Get Retired Value by Future Object" << endl;
+    {
+        std::future<int> fAsync = std::async(std::launch::async, future, 0);
+        int nAsync = fAsync.get(); // 等待线程执行结束并返回值，不能多次调用
+        std::future<int> fDeferred = std::async(std::launch::deferred, future, 0);
+        int nDeferred = fDeferred.get(); // future::get仅有一次取得到结果
+        cout << "7.1 Main Thread\t Data\t" << nAsync << "\tId " << get_id() << endl;
+        cout << "7.1 Main Thread\t Data\t" << nDeferred << "\tId " << get_id() << endl;
+    }
+
+    cout << "7.2 Package Task" << endl;
+    {
+        // std::packaged_task 包装任务方便用作线程入口函数使用
+        std::packaged_task<int(int)> ptFunction(future);
+        std::packaged_task<int(int)> ptLambda([](int n) { cout << "7.2 Lambda\t Data\t" << n << "\tId " << get_id() << endl; return ++n; });
+        std::packaged_task<int(int)> ptPackage(future);
+        thread thFunction(std::ref(ptFunction), 1);
+        thread thLambda(std::ref(ptLambda), 2);
+        ptPackage(3);
+        thFunction.join();
+        thLambda.join();
+        std::future<int> fFuture = ptFunction.get_future();
+        std::future<int> fLambda = ptLambda.get_future();
+        std::future<int> fPackage = ptPackage.get_future();
+        cout << "7.2 Function\t Data\t" << fFuture.get() << "\tId " << get_id() << endl;
+        cout << "7.2 Lambda\t Data\t" << fLambda.get() << "\tId " << get_id() << endl;
+        cout << "7.2 Package\t Data\t" << fPackage.get() << "\tId " << get_id() << endl;
+    }
+
+    cout << "7.3 Package Move" << endl;
+    {
+        std::packaged_task<int(int)> ptFunction(future);
+        vector<std::packaged_task<int(int)>> vPackage;
+        vPackage.push_back(std::move(ptFunction));
+        auto itPackage = vPackage.begin();
+        std::packaged_task<int(int)> ptFunctionCopied = std::move(*itPackage);
+        vPackage.erase(itPackage);
+        ptFunctionCopied(4);
+        std::future<int> fPackage = ptFunctionCopied.get_future();
+        cout << "7.3 Pkg Moved\t Data\t" << fPackage.get() << "\tId " << get_id() << endl;
+    }
+
+    cout << "7.4 Promise" << endl;
+    {
+        std::promise<int> pms;
+        thread thPromiseSet(PromiseSet, std::ref(pms), 5);
+        thread thPromiseGet(PromiseGet, std::ref(pms));
+        thPromiseSet.join();
+        thPromiseGet.join();
+    }
 }
