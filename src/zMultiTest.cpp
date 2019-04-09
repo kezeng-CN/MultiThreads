@@ -498,4 +498,29 @@ void zthread::test_Future()
         thPromiseSet.join();
         thPromiseGet.join();
     }
+
+    cout << "7.5 Wait For & Future Status" << endl;
+    {
+        std::future<int> fStatus = std::async(std::launch::deferred, future, 6);
+        std::future_status fsStatus = fStatus.wait_for(std::chrono::microseconds(1000));
+        if (fsStatus == std::future_status::timeout)
+        {
+            cout << "7.5 Time Out\t Data\t" << "ERROR" << "\tId " << get_id() << endl;
+        }
+        else if(fsStatus == std::future_status::ready)
+        {
+            cout << "7.5 Time On\t Data\t" << fStatus.get() << "\tId " << get_id() << endl;
+        }
+        else if(fsStatus == std::future_status::deferred)
+        {
+            // 如果std::async状态设置成std::deferred
+            auto n = fStatus.get();
+            cout << "7.5 Deferred\t Data\t" << n << "\tId " << get_id() << endl;
+        }
+    }
+
+    cout << "7.6 Shared Future" << endl;
+    {
+
+    }
 }
