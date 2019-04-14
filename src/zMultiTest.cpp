@@ -129,6 +129,8 @@ void zthread::test_BugsOfDetach()
 #include <mutex>
 #include <vector>
 
+#include <pthread.h> // 临界区调用
+
 using std::list;
 using std::lock;
 using std::mutex;
@@ -185,29 +187,54 @@ void ReadOnly()
     cout << "4.1 Threads\t Read\t" << nReadOnly << "\tId " << get_id() << endl;
 }
 
+#define Z_MULTI_TEST_LOCK_TYPE 8
 class CSharedList
 {
   private:
     static list<int> NumList;
-    static mutex mutexNumList1;
-    static mutex mutexNumList2;
+    static mutex mtxSharedList1;
+    static mutex mtxSharedList2;
     static long nSum;
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+    CRITICAL_SECTION csSharedList;
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+    pthread_mutex_t csSharedList;
+#endif
 
   public:
-    CSharedList(){};
+    CSharedList()
+    {
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        InitializeCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_init(&csSharedList, NULL);
+#endif
+    };
     ~CSharedList(){};
     void write()
     {
         for (size_t i = 0; i < 100000; i++)
         {
-            mutexNumList1.lock();
-            mutexNumList2.lock();
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+            EnterCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+            pthread_mutex_lock(&csSharedList);
+#else
+            mtxSharedList1.lock();
+            mtxSharedList2.lock();
+#endif
             // std::chrono::milliseconds sec5(5000);
             // std::this_thread::sleep_for(sec5);
-            cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
+            cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
             NumList.push_back(i);
-            mutexNumList1.unlock();
-            mutexNumList2.unlock();
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+            LeaveCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+            pthread_mutex_unlock(&csSharedList);
+#else
+            mtxSharedList1.unlock();
+            mtxSharedList2.unlock();
+#endif
         }
     }
     void read()
@@ -215,17 +242,16 @@ class CSharedList
         for (size_t i = 0; i < 100000; i++)
         {
             int nData = 0;
-            // mutexNumList1.lock();
-            // mutexNumList2.lock();
+            // mtxSharedList1.lock();
+            // mtxSharedList2.lock();
             if (read_delegation(nData) == true)
-                cout << "4.2 ReadDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+                cout << "4.2 ReadDone \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
             else
-                cout << "4.2 ReadEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
-            // mutexNumList1.unlock();
-            // mutexNumList2.unlock();
+                cout << "4.2 ReadEmpty \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
+            // mtxSharedList1.unlock();
+            // mtxSharedList2.unlock();
         }
     }
-#define Z_MULTI_TEST_LOCK_TYPE 7
     // 1 lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
     // 2 lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
     // 3 unique_lock默认使用跟lock_guard一致
@@ -233,46 +259,51 @@ class CSharedList
     // 5 unique_lock使用std::try_to_lock，mutex不能lock
     // 6 unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
     // 7 unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
+    // 8 临界区
     bool read_delegation(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
-        std::lock_guard<mutex> lock_guardNumList1(mutexNumList1);
-        std::lock_guard<mutex> lock_guardNumList2(mutexNumList2);
+        std::lock_guard<mutex> lgSharedList1(mtxSharedList1);
+        std::lock_guard<mutex> lgSharedList2(mtxSharedList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 2
-        lock(mutexNumList1, mutexNumList2);
+        lock(mtxSharedList1, mtxSharedList2);
         // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
-        std::lock_guard<mutex>(mutexNumList1, std::adopt_lock);
-        std::lock_guard<mutex>(mutexNumList2, std::adopt_lock);
+        std::lock_guard<mutex>(mtxSharedList1, std::adopt_lock);
+        std::lock_guard<mutex>(mtxSharedList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 3
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2);
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 4
-        lock(mutexNumList1, mutexNumList2);
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::adopt_lock);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::adopt_lock);
+        lock(mtxSharedList1, mtxSharedList2);
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1, std::adopt_lock);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 5
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::try_to_lock);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::try_to_lock);
-        if (!(unique_lockNumList1.owns_lock() == true && unique_lockNumList2.owns_lock() == true))
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1, std::try_to_lock);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2, std::try_to_lock);
+        if (!(ulSharedList1.owns_lock() == true && ulSharedList2.owns_lock() == true))
         {
             cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
             return false;
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 6
-        std::unique_lock<mutex> defer_lockNumList1(mutexNumList1, std::defer_lock);
-        std::unique_lock<mutex> defer_lockNumList2(mutexNumList1, std::defer_lock);
-        defer_lockNumList1.lock();
-        if (true == defer_lockNumList2.try_lock()) // 类似std::try_to_lock
+        std::unique_lock<mutex> dlSharedList1(mtxSharedList1, std::defer_lock);
+        std::unique_lock<mutex> dlSharedList2(mtxSharedList1, std::defer_lock);
+        dlSharedList1.lock();
+        if (true == dlSharedList2.try_lock()) // 类似std::try_to_lock
         {
             cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
-            defer_lockNumList1.unlock();
+            dlSharedList1.unlock();
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 7
-        std::unique_lock<mutex> unique_lockNumList1 = move_mutex(mutexNumList1);
-        std::unique_lock<mutex> unique_lockNumList2(std::move(unique_lockNumList1));
-        mutex *pMutexNumList2 = unique_lockNumList2.release();
+        std::unique_lock<mutex> ulSharedList1 = move_mutex(mtxSharedList1);
+        std::unique_lock<mutex> ulSharedList2(std::move(ulSharedList1));
+        mutex *pmtxSharedList2 = ulSharedList2.release();
+#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        EnterCriticalSection(&mutex_lock);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_lock(&csSharedList);
 #endif
         nSum++;
         bool bEmpty = NumList.empty();
@@ -282,8 +313,13 @@ class CSharedList
             NumList.pop_front();
         }
 #if Z_MULTI_TEST_LOCK_TYPE == 7
-        pMutexNumList2->unlock();
+        pmtxSharedList2->unlock();
+#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        LeaveCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_unlock(&csSharedList);
 #endif
+
         return !bEmpty;
     }
     std::unique_lock<mutex> move_mutex(mutex &m)
@@ -293,8 +329,8 @@ class CSharedList
     }
 };
 list<int> CSharedList::NumList;
-mutex CSharedList::mutexNumList1;
-mutex CSharedList::mutexNumList2;
+mutex CSharedList::mtxSharedList1;
+mutex CSharedList::mtxSharedList2;
 long CSharedList::nSum = 0;
 
 void zthread::test_DataSharing()
