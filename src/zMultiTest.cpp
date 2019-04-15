@@ -124,9 +124,12 @@ void zthread::test_BugsOfDetach()
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
+#include <ctime>
 #include <list>
 #include <mutex>
 #include <vector>
+
+#include <pthread.h> // 临界区调用
 
 using std::list;
 using std::lock;
@@ -142,9 +145,9 @@ void zthread::test_Threads()
 {
     cout << "3.1 Write Threads to Vector" << endl;
     {
-        size_t nNum = 10;
+#define N_LOOP_3_1 10
         vector<thread> vThreads;
-        for (size_t i = 0; i < nNum; i++)
+        for (size_t i = 0; i < N_LOOP_3_1; i++)
         {
             vThreads.push_back(thread(FunctionThreads, i));
         }
@@ -154,6 +157,28 @@ void zthread::test_Threads()
         }
         cout << "3.1 Main Thread\t Id " << get_id() << endl;
     }
+    cout << "3.2 False Sharing" << endl;
+    {
+#define N_LOOP_3_2 1000000
+        int aFalseSharing[100];
+        auto laFalseSharing = [](int a[], int n) {for(size_t i =0; i< N_LOOP_3_2; i++)a[n] = i; };
+        {
+            size_t clkStart = clock();
+            thread thFalseSharing1(laFalseSharing, aFalseSharing, 0);
+            thread thFalseSharing2(laFalseSharing, aFalseSharing, 1);
+            thFalseSharing1.join();
+            thFalseSharing2.join();
+            cout << "3.2 False Shr\t Loop\t" << N_LOOP_3_2 << "\tTaked " << clock() - clkStart << endl;
+        }
+        {
+            size_t clkStart = clock();
+            thread thFalseSharing1(laFalseSharing, aFalseSharing, 0);
+            thread thFalseSharing2(laFalseSharing, aFalseSharing, 99);
+            thFalseSharing1.join();
+            thFalseSharing2.join();
+            cout << "3.2 True Shr\t Loop\t" << N_LOOP_3_2 << "\tTaked " << clock() - clkStart << endl;
+        }
+    }
 }
 
 int nReadOnly = 1;
@@ -162,29 +187,54 @@ void ReadOnly()
     cout << "4.1 Threads\t Read\t" << nReadOnly << "\tId " << get_id() << endl;
 }
 
+#define Z_MULTI_TEST_LOCK_TYPE 8
 class CSharedList
 {
   private:
     static list<int> NumList;
-    static mutex mutexNumList1;
-    static mutex mutexNumList2;
+    static mutex mtxSharedList1;
+    static mutex mtxSharedList2;
     static long nSum;
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+    CRITICAL_SECTION csSharedList;
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+    pthread_mutex_t csSharedList;
+#endif
 
   public:
-    CSharedList(){};
+    CSharedList()
+    {
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        InitializeCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_init(&csSharedList, NULL);
+#endif
+    };
     ~CSharedList(){};
     void write()
     {
         for (size_t i = 0; i < 100000; i++)
         {
-            mutexNumList1.lock();
-            mutexNumList2.lock();
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+            EnterCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+            pthread_mutex_lock(&csSharedList);
+#else
+            mtxSharedList1.lock();
+            mtxSharedList2.lock();
+#endif
             // std::chrono::milliseconds sec5(5000);
             // std::this_thread::sleep_for(sec5);
-            cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
+            cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
             NumList.push_back(i);
-            mutexNumList1.unlock();
-            mutexNumList2.unlock();
+#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+            LeaveCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+            pthread_mutex_unlock(&csSharedList);
+#else
+            mtxSharedList1.unlock();
+            mtxSharedList2.unlock();
+#endif
         }
     }
     void read()
@@ -192,64 +242,68 @@ class CSharedList
         for (size_t i = 0; i < 100000; i++)
         {
             int nData = 0;
-            // mutexNumList1.lock();
-            // mutexNumList2.lock();
+            // mtxSharedList1.lock();
+            // mtxSharedList2.lock();
             if (read_delegation(nData) == true)
-                cout << "4.2 ReadDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+                cout << "4.2 ReadDone \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
             else
-                cout << "4.2 ReadEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
-            // mutexNumList1.unlock();
-            // mutexNumList2.unlock();
+                cout << "4.2 ReadEmpty \t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl;
+            // mtxSharedList1.unlock();
+            // mtxSharedList2.unlock();
         }
     }
-#define Z_MULTI_TEST_LOCK_TYPE 7
-    // 1.lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
-    // 2.lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
-    // 3.unique_lock默认使用跟lock_guard一致
-    // 4.unique_lock使用std::adopt，mutex需要lock，跟lock_guard一致
-    // 5.unique_lock使用std::try_to_lock，mutex不能lock
-    // 6.unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
-    // 7.unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
+    // 1 lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
+    // 2 lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
+    // 3 unique_lock默认使用跟lock_guard一致
+    // 4 unique_lock使用std::adopt，mutex需要lock，跟lock_guard一致
+    // 5 unique_lock使用std::try_to_lock，mutex不能lock
+    // 6 unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
+    // 7 unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
+    // 8 临界区
     bool read_delegation(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
-        std::lock_guard<mutex> lock_guardNumList1(mutexNumList1);
-        std::lock_guard<mutex> lock_guardNumList2(mutexNumList2);
+        std::lock_guard<mutex> lgSharedList1(mtxSharedList1);
+        std::lock_guard<mutex> lgSharedList2(mtxSharedList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 2
-        lock(mutexNumList1, mutexNumList2);
+        lock(mtxSharedList1, mtxSharedList2);
         // std::lock访问互斥资源在请求不成功情况下不会保持请求成功的资源，请求不成功主动释放
-        std::lock_guard<mutex>(mutexNumList1, std::adopt_lock);
-        std::lock_guard<mutex>(mutexNumList2, std::adopt_lock);
+        std::lock_guard<mutex>(mtxSharedList1, std::adopt_lock);
+        std::lock_guard<mutex>(mtxSharedList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 3
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2);
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2);
 #elif Z_MULTI_TEST_LOCK_TYPE == 4
-        lock(mutexNumList1, mutexNumList2);
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::adopt_lock);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::adopt_lock);
+        lock(mtxSharedList1, mtxSharedList2);
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1, std::adopt_lock);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2, std::adopt_lock);
 #elif Z_MULTI_TEST_LOCK_TYPE == 5
-        std::unique_lock<mutex> unique_lockNumList1(mutexNumList1, std::try_to_lock);
-        std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::try_to_lock);
-        if (!(unique_lockNumList1.owns_lock() == true && unique_lockNumList2.owns_lock() == true))
+        std::unique_lock<mutex> ulSharedList1(mtxSharedList1, std::try_to_lock);
+        std::unique_lock<mutex> ulSharedList2(mtxSharedList2, std::try_to_lock);
+        if (!(ulSharedList1.owns_lock() == true && ulSharedList2.owns_lock() == true))
         {
             cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
             return false;
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 6
-        std::unique_lock<mutex> defer_lockNumList1(mutexNumList1, std::defer_lock);
-        std::unique_lock<mutex> defer_lockNumList2(mutexNumList1, std::defer_lock);
-        defer_lockNumList1.lock();
-        if (true == defer_lockNumList2.try_lock()) // 类似std::try_to_lock
+        std::unique_lock<mutex> dlSharedList1(mtxSharedList1, std::defer_lock);
+        std::unique_lock<mutex> dlSharedList2(mtxSharedList1, std::defer_lock);
+        dlSharedList1.lock();
+        if (true == dlSharedList2.try_lock()) // 类似std::try_to_lock
         {
             cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
-            defer_lockNumList1.unlock();
+            dlSharedList1.unlock();
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 7
-        std::unique_lock<mutex> unique_lockNumList1 = move_mutex(mutexNumList1);
-        std::unique_lock<mutex> unique_lockNumList2(std::move(unique_lockNumList1));
-        mutex *pMutexNumList2 = unique_lockNumList2.release();
+        std::unique_lock<mutex> ulSharedList1 = move_mutex(mtxSharedList1);
+        std::unique_lock<mutex> ulSharedList2(std::move(ulSharedList1));
+        mutex *pmtxSharedList2 = ulSharedList2.release();
+#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        EnterCriticalSection(&mutex_lock);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_lock(&csSharedList);
 #endif
         nSum++;
         bool bEmpty = NumList.empty();
@@ -259,8 +313,13 @@ class CSharedList
             NumList.pop_front();
         }
 #if Z_MULTI_TEST_LOCK_TYPE == 7
-        pMutexNumList2->unlock();
+        pmtxSharedList2->unlock();
+#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+        LeaveCriticalSection(&csSharedList);
+#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+        pthread_mutex_unlock(&csSharedList);
 #endif
+
         return !bEmpty;
     }
     std::unique_lock<mutex> move_mutex(mutex &m)
@@ -270,8 +329,8 @@ class CSharedList
     }
 };
 list<int> CSharedList::NumList;
-mutex CSharedList::mutexNumList1;
-mutex CSharedList::mutexNumList2;
+mutex CSharedList::mtxSharedList1;
+mutex CSharedList::mtxSharedList2;
 long CSharedList::nSum = 0;
 
 void zthread::test_DataSharing()
@@ -412,9 +471,9 @@ std::condition_variable CNumQueue::cvNumQueue;
 void zthread::test_Condition_Variable()
 {
     CNumQueue objNumQueue;
-    thread thWrite(CNumQueue::write_notify_one, objNumQueue);
-    thread thRead1(CNumQueue::read_wait, objNumQueue);
-    thread thRead2(CNumQueue::read_wait, objNumQueue);
+    thread thWrite(&CNumQueue::write_notify_one, objNumQueue);
+    thread thRead1(&CNumQueue::read_wait, objNumQueue);
+    thread thRead2(&CNumQueue::read_wait, objNumQueue);
     thWrite.join();
     thRead1.join();
     thRead2.join();
@@ -422,6 +481,7 @@ void zthread::test_Condition_Variable()
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
+#include <ctime>
 #include <future>
 
 int FutureTest(int n)
@@ -449,12 +509,22 @@ void zthread::test_Future()
 {
     cout << "7.1 Get Retired Value by Future Object" << endl;
     {
-        std::future<int> fAsync = std::async(std::launch::async, FutureTest, 0);
-        int nAsync = fAsync.valid() == true ? fAsync.get() : -1;
-        std::future<int> fDeferred = std::async(std::launch::deferred, FutureTest, 0);
-        int nDeferred = fDeferred.valid() == true ? fDeferred.get() : -1; // future::get仅可取一次结果
-        cout << "7.1 Main Thread\t Data\t" << nAsync << "\tId " << get_id() << endl;
-        cout << "7.1 Main Thread\t Data\t" << nDeferred << "\tId " << get_id() << endl;
+        {
+            std::future<int> fAsync = std::async(std::launch::async, FutureTest, 0);
+            int nAsync = fAsync.valid() == true ? fAsync.get() : -1;
+            cout << "7.1 Async\t Data\t" << nAsync << "\tId " << get_id() << endl;
+        }
+        {
+            std::future<int> fDeferred = std::async(std::launch::deferred, FutureTest, 0);
+            int nDeferred = fDeferred.valid() == true ? fDeferred.get() : -1; // future::get仅可取一次结果
+            cout << "7.1 Deferred\t Data\t" << nDeferred << "\tId " << get_id() << endl;
+        }
+        {
+            // std::async第一参数不传则为std::launch::async | std::launch::deferred默认值，由系统自行决定是否启用异步任务
+            std::future<int> fDefault = std::async(std::launch::async | std::launch::deferred, FutureTest, 0);
+            auto nDefault = fDefault.get();
+            cout << "7.1 Default\t Data\t" << nDefault << "\tId " << get_id() << endl;
+        }
     }
 
     cout << "7.2 Package Task" << endl;
@@ -500,8 +570,20 @@ void zthread::test_Future()
 
     cout << "7.5 Wait For & Future Status" << endl;
     {
+#define Z_MULTI_TEST_FUTURE_STATUS 3
+// 1 std::future_status::wait_for
+// 2 std::future_ststus::ready
+// 3 std::future_status::deferred
+#if Z_MULTI_TEST_FUTURE_STATUS == 1
+        std::future<int> fStatus = std::async(std::launch::async, FutureTest, 6);
+        std::future_status fsStatus = fStatus.wait_for(std::chrono::seconds(0));
+#elif Z_MULTI_TEST_FUTURE_STATUS == 2
+        std::future<int> fStatus = std::async(std::launch::async, FutureTest, 6);
+        std::future_status fsStatus = fStatus.wait_for(std::chrono::seconds(10));
+#elif Z_MULTI_TEST_FUTURE_STATUS == 3
         std::future<int> fStatus = std::async(std::launch::deferred, FutureTest, 6);
-        std::future_status fsStatus = fStatus.wait_for(std::chrono::microseconds(1000));
+        std::future_status fsStatus = fStatus.wait_for(std::chrono::seconds(0));
+#endif
         if (fsStatus == std::future_status::timeout)
         {
             cout << "7.5 Time Out\t Data\t" << -1 << "\tId " << get_id() << endl;
@@ -512,13 +594,15 @@ void zthread::test_Future()
         }
         else if (fsStatus == std::future_status::deferred)
         {
-            // 如果std::async状态设置成std::deferred
             auto n = fStatus.get();
             cout << "7.5 Deferred\t Data\t" << n << "\tId " << get_id() << endl;
         }
     }
 
-#define Z_MULTI_TEST_SHARED_FUTURE 1
+#define Z_MULTI_TEST_SHARED_FUTURE 2
+    // 1 assign std::shared_future by get_future
+    // 2 init std::shared_future by future object
+    // 3 init std::shared_future by future object.share()
     cout << "7.6 Shared Future" << endl;
     {
         std::packaged_task<int(int)> ptShared(FutureTest);
@@ -527,14 +611,68 @@ void zthread::test_Future()
 #if Z_MULTI_TEST_SHARED_FUTURE == 1
         std::shared_future<int> sfShared = ptShared.get_future();
 #elif Z_MULTI_TEST_SHARED_FUTURE == 2
+        std::shared_future<int> sfShared(ptShared.get_future());
+#elif Z_MULTI_TEST_SHARED_FUTURE == 3
         std::future<int> fShared = ptShared.get_future();
         std::shared_future<int> sfShared(fShared.share());
 #endif
         int n = sfShared.valid() == true ? sfShared.get() : -1;
-        cout << "7.6 Shared Set\t Data\t" << n << "\tId " << get_id() << endl;
-        auto laGet = [](std::shared_future<int> f) {auto n = f.get();cout << "7.6 Shared Get\t Data\t" << n << "\tId " << get_id() << endl; };
-        // laGet(sfShared);
+        cout << "7.6 Main Get\t Data\t" << n << "\tId " << get_id() << endl;
+        // 从另一个线程中取值
+        auto laGet = [](std::shared_future<int> f) {auto n = f.get();cout << "7.6 Lambda Get\t Data\t" << n << "\tId " << get_id() << endl; };
+        laGet(sfShared); // Call Lambda Directly
         thread thGet(laGet, sfShared);
         thGet.join();
+    }
+
+    cout << "7.7 Atomic Variable" << endl;
+    {
+        static std::atomic<int> atmData;
+        static mutex mtxAtomic;
+        static int nData;
+#define N_LOOP_7_7 1000000
+        auto laMutexless = [] { for(size_t i = 0; i < N_LOOP_7_7; i++){nData++;} };
+        auto laAtomic = [] { for(size_t i = 0; i < N_LOOP_7_7; i++){atmData++;} };
+        auto laAtomicFailed = [] { for(size_t i = 0; i < N_LOOP_7_7; i++){atmData = atmData + 1;} };
+        auto laMutex = [] { for(size_t i = 0; i < N_LOOP_7_7; i++){mtxAtomic.lock(); nData++; mtxAtomic.unlock();} };
+        size_t clkStart;
+
+        nData = 0;
+        {
+            clkStart = clock();
+            thread thMutexless1(laMutexless);
+            thread thMutexless2(laMutexless);
+            thMutexless1.join();
+            thMutexless2.join();
+            cout << "7.7 Do Mtxless\t Data\t" << nData << "\tTaked " << clock() - clkStart << endl;
+        }
+        atmData = 0;
+        {
+            clkStart = clock();
+            thread thAtomic1(laAtomic);
+            thread thAtomic2(laAtomic);
+            thAtomic1.join();
+            thAtomic2.join();
+            cout << "7.7 Do Atomic\t Data\t" << atmData << "\tTaked " << clock() - clkStart << endl;
+        }
+        nData = 0;
+        {
+            clkStart = clock();
+            thread thMutex1(laMutex);
+            thread thMutex2(laMutex);
+            thMutex1.join();
+            thMutex2.join();
+            cout << "7.7 Do Mutex\t Data\t" << nData << "\tTaked " << clock() - clkStart << endl;
+        }
+        atmData = 0;
+        {
+            clkStart = clock();
+            thread thAtomicFailed1(laAtomicFailed);
+            thread thAtomicFailed2(laAtomicFailed);
+            thAtomicFailed1.join();
+            thAtomicFailed2.join();
+            cout << "7.7 Non Atomic\t Data\t" << atmData << "\tTaked " << clock() - clkStart << endl;
+            // atomic 对++ -- += -=
+        }
     }
 }
