@@ -30,29 +30,33 @@ void Funtion()
 void zthread::test_Creation()
 {
     cout << "1.1 Create by Function" << endl;
-    thread th1(Funtion);
-    th1.join();
+    {
+        thread thFunction(Funtion);
+        thFunction.join();
+    }
     cout << "1.2 Create by Functor" << endl;
-    thread th2(Functor(12));
-    th2.join();
+    {
+        thread thFunctor(Functor(12));
+        thFunctor.join();
+    }
     cout << "1.3 Create by Lambda" << endl;
-    auto la = [] { cout << "1.3 Lambda Start" << endl; };
-    thread th3(la);
-    th3.join();
+    {
+        auto la = [] { cout << "1.3 Lambda Start" << endl; };
+        thread thLambda(la);
+        thLambda.join();
+    }
     cout << "1.4 Create by MemberFunction" << endl;
-    Functor objFunctor(0);
-    thread th4(&Functor::MemberFunction, objFunctor, 14);
-    th4.join();
+    {
+        Functor objMemFunctor(0);
+        thread th4(&Functor::MemberFunction, objMemFunctor, 14);
+        th4.join();
+    }
 }
+
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
 using std::unique_ptr;
 
-void FunctionPassbyFalseRef(const int &nNum, char *cStr)
-{
-    cout << "2.1 ThreadNum\t Addr\t" << &nNum << "\tData\t" << nNum << "\tId " << get_id() << endl;
-    cout << "2.1 ThreadArry\t Addr\t" << &cStr << "\tData\t" << cStr << "\tId " << get_id() << endl;
-}
 class CArgMutable
 {
   public:
@@ -62,10 +66,6 @@ class CArgMutable
     CArgMutable(const CArgMutable &a) : nData(a.nData) { cout << "2.2 Copy Ctor\t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl; };
     ~CArgMutable() { cout << "2.2 Dctor\t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl; };
 };
-void FunctionPassbyObj(const CArgMutable &c)
-{
-    cout << "2.2 ConstObj\t Addr\t" << &c << "\tData\t" << ++c.nData << "\tId " << get_id() << endl;
-}
 class CArgUnMut
 {
   public:
@@ -75,32 +75,29 @@ class CArgUnMut
     CArgUnMut(const CArgUnMut &a) : nData(a.nData) { cout << "2.3 Copy Ctor\t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl; };
     ~CArgUnMut() { cout << "2.3 Dctor\t Addr\t" << this << "\tData\t" << nData << "\tId " << get_id() << endl; };
 };
-void FunctionPassbyRef(CArgUnMut &c)
-{
-    c.nData = 231;
-    cout << "2.3 RefObj\t Addr\t" << &c << "\tData\t" << c.nData << "\tId " << get_id() << endl;
-}
-void FunctionPassbySmartPtr(unique_ptr<int> p)
-{
-    *p = 241;
-    cout << "2.4 Unique Ptr\t Addr\t" << &p << "\tData\t" << *p << "\tId " << get_id() << endl;
-}
 void zthread::test_BugsOfDetach()
 {
     cout << "2.1 Pass by False Reference" << endl;
     {
         int nNum = 0;
         char cStr[] = {"2.1"};
+        auto laFalseRef = [](const int &nNum, char *cStr) {
+            cout << "2.1 ThreadNum\t Addr\t" << &nNum << "\tData\t" << nNum << "\tId " << get_id() << endl;
+            cout << "2.1 ThreadArry\t Addr\t" << &cStr << "\tData\t" << cStr << "\tId " << get_id() << endl;
+        };
         cout << "2.1 MainNum\t Addr\t" << &nNum << "\tData\t" << nNum << "\tId " << get_id() << endl;
         cout << "2.1 MainArry\t Addr\t" << &cStr << "\tData\t" << cStr << "\tId " << get_id() << endl;
-        thread th1(FunctionPassbyFalseRef, nNum, cStr); //1 ①引用传递参数(VS会进行一次拷贝 GNU C会进行两次拷贝) ②引用传递指针（）
-        th1.join();
+        thread thFalseRef(laFalseRef, nNum, cStr); //1 ①引用传递参数(VS会进行一次拷贝 GNU C会进行两次拷贝) ②引用传递指针（）
+        thFalseRef.join();
     }
 
     cout << "2.2 Pass Arguement by Parameterized Constructor" << endl;
     {
         CArgMutable objArgMutable(22);
-        thread th2(FunctionPassbyObj, 22); //2 不要用隐式类型转换
+        auto laPassbyObj = [](const CArgMutable &c) {
+            cout << "2.2 ConstObj\t Addr\t" << &c << "\tData\t" << ++c.nData << "\tId " << get_id() << endl;
+        };
+        thread th2(laPassbyObj, 22); //2 不要用隐式类型转换
         cout << "2.2 Main Thread\t Addr\t" << &objArgMutable << "\tData\t" << objArgMutable.nData << "\tId " << get_id() << endl;
         th2.join();
     }
@@ -108,17 +105,25 @@ void zthread::test_BugsOfDetach()
     cout << "2.3 Pass Arguement by Reference" << endl;
     {
         CArgUnMut objArgUnMut(23);
-        thread th3(FunctionPassbyRef, std::ref(objArgUnMut)); //3 通过引用传递的参数使用std::ref函数，线程接收参数是实际地址
+        auto laPassbyRef = [](CArgUnMut &c) {
+            c.nData = 231;
+            cout << "2.3 RefObj\t Addr\t" << &c << "\tData\t" << c.nData << "\tId " << get_id() << endl;
+        };
+        thread thPassbyRef(laPassbyRef, std::ref(objArgUnMut)); //3 通过引用传递的参数使用std::ref函数，线程接收参数是实际地址
         cout << "2.3 Main Thread\t Addr\t" << &objArgUnMut << "\tData\t" << objArgUnMut.nData << "\tId " << get_id() << endl;
-        th3.join();
+        thPassbyRef.join();
     }
 
     cout << "2.4 Pass Smart Pointer as Arguement" << endl;
     {
         unique_ptr<int> pNum(new int(24));
+        auto laPassbySmartPtr = [](unique_ptr<int> p) {
+            *p = 241;
+            cout << "2.4 Unique Ptr\t Addr\t" << &p << "\tData\t" << *p << "\tId " << get_id() << endl;
+        };
         cout << "2.4 Main Thread\t Addr\t" << &pNum << "\tData\t" << *pNum << "\tId " << get_id() << endl;
-        thread th4(FunctionPassbySmartPtr, std::move(pNum));
-        th4.join();
+        thread thPassbySmartPtr(laPassbySmartPtr, std::move(pNum));
+        thPassbySmartPtr.join();
     }
 }
 
@@ -136,20 +141,19 @@ using std::lock;
 using std::mutex;
 using std::vector;
 
-void FunctionThreads(int tid)
-{
-    cout << "3.1 Threads\t Id " << get_id() << "\tThreadId " << tid << endl;
-}
-
 void zthread::test_Threads()
 {
     cout << "3.1 Write Threads to Vector" << endl;
     {
 #define N_LOOP_3_1 10
         vector<thread> vThreads;
+
+        auto laFunc = [](int tid) {
+            cout << "3.1 Threads\t Id " << get_id() << "\tThreadId " << tid << endl;
+        };
         for (size_t i = 0; i < N_LOOP_3_1; i++)
         {
-            vThreads.push_back(thread(FunctionThreads, i));
+            vThreads.push_back(thread(laFunc, i));
         }
         for (auto itThread = vThreads.begin(); itThread != vThreads.end(); itThread++)
         {
@@ -181,11 +185,7 @@ void zthread::test_Threads()
     }
 }
 
-int nReadOnly = 1;
-void ReadOnly()
-{
-    cout << "4.1 Threads\t Read\t" << nReadOnly << "\tId " << get_id() << endl;
-}
+//------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #define Z_MULTI_TEST_LOCK_TYPE 8
 class CSharedList
@@ -200,7 +200,7 @@ class CSharedList
 #elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
     pthread_mutex_t csSharedList;
 #endif
-
+#define N_LOOP_4_2 10
   public:
     CSharedList()
     {
@@ -213,7 +213,7 @@ class CSharedList
     ~CSharedList(){};
     void write()
     {
-        for (size_t i = 0; i < 100000; i++)
+        for (size_t i = 0; i < N_LOOP_4_2; i++)
         {
 #if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
             EnterCriticalSection(&csSharedList);
@@ -239,7 +239,7 @@ class CSharedList
     }
     void read()
     {
-        for (size_t i = 0; i < 100000; i++)
+        for (size_t i = 0; i < N_LOOP_4_2; i++)
         {
             int nData = 0;
             // mtxSharedList1.lock();
@@ -319,7 +319,6 @@ class CSharedList
 #elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
         pthread_mutex_unlock(&csSharedList);
 #endif
-
         return !bEmpty;
     }
     std::unique_lock<mutex> move_mutex(mutex &m)
@@ -337,11 +336,15 @@ void zthread::test_DataSharing()
 {
     cout << "4.1 Read Only" << endl;
     {
-        size_t nNum = 10;
+#define N_LOOP_4_1 10
         vector<thread> vThreads;
-        for (size_t i = 0; i < nNum; i++)
+        static int nData = 1;
+        auto laReadOnly = [](int n) {
+            cout << "4.1 Threads\t Read\t" << n << "\tId " << get_id() << endl;
+        };
+        for (size_t i = 0; i < N_LOOP_4_1; i++)
         {
-            vThreads.push_back(thread(ReadOnly));
+            vThreads.push_back(thread(laReadOnly, nData));
         }
         for (auto itThread = vThreads.begin(); itThread != vThreads.end(); itThread++)
         {
