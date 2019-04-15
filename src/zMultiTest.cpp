@@ -36,8 +36,8 @@ void zthread::test_Creation()
     thread th2(Functor(12));
     th2.join();
     cout << "1.3 Create by Lambda" << endl;
-    auto LambdaTH = [] { cout << "1.3 Lambda Start" << endl; };
-    thread th3(LambdaTH);
+    auto la = [] { cout << "1.3 Lambda Start" << endl; };
+    thread th3(la);
     th3.join();
     cout << "1.4 Create by MemberFunction" << endl;
     Functor objFunctor(0);
@@ -140,7 +140,7 @@ void FunctionThreads(int tid)
 
 void zthread::test_Threads()
 {
-    cout << "3.1 Push Threads to Vector" << endl;
+    cout << "3.1 Write Threads to Vector" << endl;
     {
         size_t nNum = 10;
         vector<thread> vThreads;
@@ -157,12 +157,12 @@ void zthread::test_Threads()
 }
 
 int nReadOnly = 1;
-void FunctionDataR()
+void ReadOnly()
 {
     cout << "4.1 Threads\t Read\t" << nReadOnly << "\tId " << get_id() << endl;
 }
 
-class CNumList
+class CSharedList
 {
   private:
     static list<int> NumList;
@@ -171,9 +171,9 @@ class CNumList
     static long nSum;
 
   public:
-    CNumList(){};
-    ~CNumList(){};
-    void push()
+    CSharedList(){};
+    ~CSharedList(){};
+    void write()
     {
         for (size_t i = 0; i < 100000; i++)
         {
@@ -181,23 +181,23 @@ class CNumList
             mutexNumList2.lock();
             // std::chrono::milliseconds sec5(5000);
             // std::this_thread::sleep_for(sec5);
-            cout << "4.2 PushDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
+            cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << nSum++ << "\tId " << get_id() << endl;
             NumList.push_back(i);
             mutexNumList1.unlock();
             mutexNumList2.unlock();
         }
     }
-    void pop()
+    void read()
     {
         for (size_t i = 0; i < 100000; i++)
         {
             int nData = 0;
             // mutexNumList1.lock();
             // mutexNumList2.lock();
-            if (pop_delegation(nData) == true)
-                cout << "4.2 PopDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+            if (read_delegation(nData) == true)
+                cout << "4.2 ReadDone \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
             else
-                cout << "4.2 PopEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
+                cout << "4.2 ReadEmpty \t Addr\t" << this << "\tData\t" << nSum << "\tId " << get_id() << endl;
             // mutexNumList1.unlock();
             // mutexNumList2.unlock();
         }
@@ -210,7 +210,7 @@ class CNumList
     // 5.unique_lock使用std::try_to_lock，mutex不能lock
     // 6.unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
     // 7.unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
-    bool pop_delegation(int &n)
+    bool read_delegation(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
         std::lock_guard<mutex> lock_guardNumList1(mutexNumList1);
@@ -232,7 +232,7 @@ class CNumList
         std::unique_lock<mutex> unique_lockNumList2(mutexNumList2, std::try_to_lock);
         if (!(unique_lockNumList1.owns_lock() == true && unique_lockNumList2.owns_lock() == true))
         {
-            cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
+            cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
             return false;
         }
@@ -242,7 +242,7 @@ class CNumList
         defer_lockNumList1.lock();
         if (true == defer_lockNumList2.try_lock()) // 类似std::try_to_lock
         {
-            cout << "4.2 PopLck\t Addr\t" << this << "\tData\tERROR"
+            cout << "4.2 ReadLck\t Addr\t" << this << "\tData\tError"
                  << "\tId " << get_id() << endl;
             defer_lockNumList1.unlock();
         }
@@ -269,10 +269,10 @@ class CNumList
         return std::unique_lock<mutex>(m);
     }
 };
-list<int> CNumList::NumList;
-mutex CNumList::mutexNumList1;
-mutex CNumList::mutexNumList2;
-long CNumList::nSum = 0;
+list<int> CSharedList::NumList;
+mutex CSharedList::mutexNumList1;
+mutex CSharedList::mutexNumList2;
+long CSharedList::nSum = 0;
 
 void zthread::test_DataSharing()
 {
@@ -282,7 +282,7 @@ void zthread::test_DataSharing()
         vector<thread> vThreads;
         for (size_t i = 0; i < nNum; i++)
         {
-            vThreads.push_back(thread(FunctionDataR));
+            vThreads.push_back(thread(ReadOnly));
         }
         for (auto itThread = vThreads.begin(); itThread != vThreads.end(); itThread++)
         {
@@ -292,9 +292,9 @@ void zthread::test_DataSharing()
     }
     cout << "4.2 Read and Write with Lock" << endl;
     {
-        CNumList objNumList;
-        thread thRecv(&CNumList::push, objNumList);
-        thread thSend(&CNumList::pop, objNumList);
+        CSharedList objNumList;
+        thread thRecv(&CSharedList::write, objNumList);
+        thread thSend(&CSharedList::read, objNumList);
         thRecv.join();
         thSend.join();
         cout << "4.2 Main Thread\t Id " << get_id() << endl;
@@ -384,23 +384,23 @@ class CNumQueue
     static std::condition_variable cvNumQueue;
 
   public:
-    void push_notify_one()
+    void write_notify_one()
     {
         for (size_t i = 0; i < 10000; i++)
         {
             std::unique_lock<mutex> uNumQueue(mtxNumQueue);
             NumQueue.push(i);
-            cout << "6.1 PushDone \t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
+            cout << "6.1 WriteDone \t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
             cvNumQueue.notify_all();
         }
     }
-    void pop_wait()
+    void read_wait()
     {
         for (;;)
         {
             std::unique_lock<mutex> uNumQueue(mtxNumQueue);
             cvNumQueue.wait(uNumQueue, [this] { return !NumQueue.empty(); });
-            cout << "6.1 PopDone \t Addr\t" << this << "\tData\t" << NumQueue.front() << "\tId " << get_id() << endl;
+            cout << "6.1 ReadDone \t Addr\t" << this << "\tData\t" << NumQueue.front() << "\tId " << get_id() << endl;
             NumQueue.pop();
         }
     }
@@ -412,23 +412,22 @@ std::condition_variable CNumQueue::cvNumQueue;
 void zthread::test_Condition_Variable()
 {
     CNumQueue objNumQueue;
-    thread thPush(CNumQueue::push_notify_one, objNumQueue);
-    thread thPop1(CNumQueue::pop_wait, objNumQueue);
-    thread thPop2(CNumQueue::pop_wait, objNumQueue);
-    thPush.join();
-    thPop1.join();
-    thPop2.join();
+    thread thWrite(CNumQueue::write_notify_one, objNumQueue);
+    thread thRead1(CNumQueue::read_wait, objNumQueue);
+    thread thRead2(CNumQueue::read_wait, objNumQueue);
+    thWrite.join();
+    thRead1.join();
+    thRead2.join();
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #include <future>
 
-int future(int n)
+int FutureTest(int n)
 {
     cout << "7.X Future Beg\t Data\t" << n << "\tId " << get_id() << endl;
-    std::chrono::milliseconds sec5(5000);
-    // std::this_thread::sleep_for(sec5);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     cout << "7.X Future End\t Data\t" << n << "\tId " << get_id() << endl;
     return n;
 }
@@ -450,10 +449,10 @@ void zthread::test_Future()
 {
     cout << "7.1 Get Retired Value by Future Object" << endl;
     {
-        std::future<int> fAsync = std::async(std::launch::async, future, 0);
-        int nAsync = fAsync.get(); // 等待线程执行结束并返回值，不能多次调用
-        std::future<int> fDeferred = std::async(std::launch::deferred, future, 0);
-        int nDeferred = fDeferred.get(); // future::get仅有一次取得到结果
+        std::future<int> fAsync = std::async(std::launch::async, FutureTest, 0);
+        int nAsync = fAsync.valid() == true ? fAsync.get() : -1;
+        std::future<int> fDeferred = std::async(std::launch::deferred, FutureTest, 0);
+        int nDeferred = fDeferred.valid() == true ? fDeferred.get() : -1; // future::get仅可取一次结果
         cout << "7.1 Main Thread\t Data\t" << nAsync << "\tId " << get_id() << endl;
         cout << "7.1 Main Thread\t Data\t" << nDeferred << "\tId " << get_id() << endl;
     }
@@ -461,9 +460,9 @@ void zthread::test_Future()
     cout << "7.2 Package Task" << endl;
     {
         // std::packaged_task 包装任务方便用作线程入口函数使用
-        std::packaged_task<int(int)> ptFunction(future);
+        std::packaged_task<int(int)> ptFunction(FutureTest);
         std::packaged_task<int(int)> ptLambda([](int n) { cout << "7.2 Lambda\t Data\t" << n << "\tId " << get_id() << endl; return ++n; });
-        std::packaged_task<int(int)> ptPackage(future);
+        std::packaged_task<int(int)> ptPackage(FutureTest);
         thread thFunction(std::ref(ptFunction), 1);
         thread thLambda(std::ref(ptLambda), 2);
         ptPackage(3);
@@ -479,7 +478,7 @@ void zthread::test_Future()
 
     cout << "7.3 Package Move" << endl;
     {
-        std::packaged_task<int(int)> ptFunction(future);
+        std::packaged_task<int(int)> ptFunction(FutureTest);
         vector<std::packaged_task<int(int)>> vPackage;
         vPackage.push_back(std::move(ptFunction));
         auto itPackage = vPackage.begin();
@@ -501,17 +500,17 @@ void zthread::test_Future()
 
     cout << "7.5 Wait For & Future Status" << endl;
     {
-        std::future<int> fStatus = std::async(std::launch::deferred, future, 6);
+        std::future<int> fStatus = std::async(std::launch::deferred, FutureTest, 6);
         std::future_status fsStatus = fStatus.wait_for(std::chrono::microseconds(1000));
         if (fsStatus == std::future_status::timeout)
         {
-            cout << "7.5 Time Out\t Data\t" << "ERROR" << "\tId " << get_id() << endl;
+            cout << "7.5 Time Out\t Data\t" << -1 << "\tId " << get_id() << endl;
         }
-        else if(fsStatus == std::future_status::ready)
+        else if (fsStatus == std::future_status::ready)
         {
             cout << "7.5 Time On\t Data\t" << fStatus.get() << "\tId " << get_id() << endl;
         }
-        else if(fsStatus == std::future_status::deferred)
+        else if (fsStatus == std::future_status::deferred)
         {
             // 如果std::async状态设置成std::deferred
             auto n = fStatus.get();
@@ -519,8 +518,23 @@ void zthread::test_Future()
         }
     }
 
+#define Z_MULTI_TEST_SHARED_FUTURE 1
     cout << "7.6 Shared Future" << endl;
     {
-
+        std::packaged_task<int(int)> ptShared(FutureTest);
+        thread thSet(std::ref(ptShared), 7);
+        thSet.join();
+#if Z_MULTI_TEST_SHARED_FUTURE == 1
+        std::shared_future<int> sfShared = ptShared.get_future();
+#elif Z_MULTI_TEST_SHARED_FUTURE == 2
+        std::future<int> fShared = ptShared.get_future();
+        std::shared_future<int> sfShared(fShared.share());
+#endif
+        int n = sfShared.valid() == true ? sfShared.get() : -1;
+        cout << "7.6 Shared Set\t Data\t" << n << "\tId " << get_id() << endl;
+        auto laGet = [](std::shared_future<int> f) {auto n = f.get();cout << "7.6 Shared Get\t Data\t" << n << "\tId " << get_id() << endl; };
+        // laGet(sfShared);
+        thread thGet(laGet, sfShared);
+        thGet.join();
     }
 }
