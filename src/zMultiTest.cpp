@@ -188,6 +188,15 @@ void zthread::test_Threads()
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #define Z_MULTI_TEST_LOCK_TYPE 8
+// 0 mutex直接加锁
+// 1 lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
+// 2 lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
+// 3 unique_lock默认使用跟lock_guard一致
+// 4 unique_lock使用std::adopt，mutex需要lock，跟lock_guard一致
+// 5 unique_lock使用std::try_to_lock，mutex不能lock
+// 6 unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
+// 7 unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
+// 8 临界区
 class CSharedList
 {
   private:
@@ -195,43 +204,69 @@ class CSharedList
     static mutex mtxSharedList1;
     static mutex mtxSharedList2;
     static long nSum;
-#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+#if Z_MULTI_TEST_LOCK_TYPE == 8 && (defined _MSC_VER)
     CRITICAL_SECTION csSharedList;
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined __GNUC__)
     pthread_mutex_t csSharedList;
 #endif
 #define N_LOOP_4_2 10
   public:
     CSharedList()
     {
-#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+#if Z_MULTI_TEST_LOCK_TYPE == 8 && (defined _MSC_VER)
         InitializeCriticalSection(&csSharedList);
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined __GNUC__)
         pthread_mutex_init(&csSharedList, NULL);
 #endif
     };
     ~CSharedList(){};
+#if Z_MULTI_TEST_LOCK_TYPE == 8
+    class CCriticalSection
+    {
+      public:
+#if defined _MSC_VER
+        CCriticalSection(CRITICAL_SECTION *p) : pCS(p)
+        {
+            EnterCriticalSection(pCS);
+        }
+#elif (defined __GNUC__)
+        CCriticalSection(pthread_mutex_t *p) : pCS(p)
+        {
+            pthread_mutex_lock(pCS);
+        }
+#endif
+        ~CCriticalSection()
+        {
+#if defined _MSC_VER
+            LeaveCriticalSection(pCS);
+#elif (defined __GNUC__)
+            pthread_mutex_unlock(pCS);
+#endif
+        }
+
+      private:
+#if defined _MSC_VER
+        CRITICAL_SECTION *pCS;
+#elif (defined __GNUC__)
+        pthread_mutex_t *pCS;
+#endif
+    };
+#endif
     void write()
     {
         for (size_t i = 0; i < N_LOOP_4_2; i++)
         {
-#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
-            EnterCriticalSection(&csSharedList);
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
-            pthread_mutex_lock(&csSharedList);
-#else
+#if Z_MULTI_TEST_LOCK_TYPE == 0
             mtxSharedList1.lock();
             mtxSharedList2.lock();
+#elif Z_MULTI_TEST_LOCK_TYPE == 8
+            CCriticalSection csLock(&csSharedList);
 #endif
             // std::chrono::milliseconds sec5(5000);
             // std::this_thread::sleep_for(sec5);
             cout << "4.2 WriteDone\t Addr\t" << this << "\tData\t" << i << "\tId " << get_id() << endl;
             NumList.push_back(i);
-#if (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
-            LeaveCriticalSection(&csSharedList);
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
-            pthread_mutex_unlock(&csSharedList);
-#else
+#if Z_MULTI_TEST_LOCK_TYPE == 0
             mtxSharedList1.unlock();
             mtxSharedList2.unlock();
 #endif
@@ -252,14 +287,6 @@ class CSharedList
             // mtxSharedList2.unlock();
         }
     }
-    // 1 lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
-    // 2 lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
-    // 3 unique_lock默认使用跟lock_guard一致
-    // 4 unique_lock使用std::adopt，mutex需要lock，跟lock_guard一致
-    // 5 unique_lock使用std::try_to_lock，mutex不能lock
-    // 6 unique_lock使用std::defer_lock，mutex不能lock，初始化了一个unlock的mutex，可通过try_lock尝试加锁
-    // 7 unique_lock使用std::release，解绑unique_lock和mutex绑定关系，解绑unique_lock的mutex后有责任接管该mutex的lock和unlock操作
-    // 8 临界区
     bool read_delegation(int &n)
     {
 #if Z_MULTI_TEST_LOCK_TYPE == 1
@@ -300,10 +327,12 @@ class CSharedList
         std::unique_lock<mutex> ulSharedList1 = move_mutex(mtxSharedList1);
         std::unique_lock<mutex> ulSharedList2(std::move(ulSharedList1));
         mutex *pmtxSharedList2 = ulSharedList2.release();
-#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined _MSC_VER)
         EnterCriticalSection(&mutex_lock);
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined __GNUC__)
         pthread_mutex_lock(&csSharedList);
+#elif Z_MULTI_TEST_LOCK_TYPE == 9
+
 #endif
         nSum++;
         bool bEmpty = NumList.empty();
@@ -314,9 +343,9 @@ class CSharedList
         }
 #if Z_MULTI_TEST_LOCK_TYPE == 7
         pmtxSharedList2->unlock();
-#elif (defined _MSC_VER) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined _MSC_VER)
         LeaveCriticalSection(&csSharedList);
-#elif (defined __GNUC__) && Z_MULTI_TEST_LOCK_TYPE == 8
+#elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined __GNUC__)
         pthread_mutex_unlock(&csSharedList);
 #endif
         return !bEmpty;
