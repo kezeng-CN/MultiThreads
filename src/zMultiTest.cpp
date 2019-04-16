@@ -187,7 +187,7 @@ void zthread::test_Threads()
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 
-#define Z_MULTI_TEST_LOCK_TYPE 8
+#define Z_MULTI_TEST_LOCK_TYPE 7
 // 0 mutex直接加锁
 // 1 lock_guard单独加锁(加索区域是其对象生命周期,由于加索顺序可能死锁)
 // 2 lock加锁,再由lock_guard接管(lock请求不成功释放已获得的资源)
@@ -324,7 +324,8 @@ class CSharedList
             dlSharedList1.unlock();
         }
 #elif Z_MULTI_TEST_LOCK_TYPE == 7
-        std::unique_lock<mutex> ulSharedList1 = move_mutex(mtxSharedList1);
+        auto laMoveMutex = [](std::mutex &mtx) { return std::unique_lock<mutex>(mtx); };
+        std::unique_lock<mutex> ulSharedList1 = laMoveMutex(mtxSharedList1);
         std::unique_lock<mutex> ulSharedList2(std::move(ulSharedList1));
         mutex *pmtxSharedList2 = ulSharedList2.release();
 #elif Z_MULTI_TEST_LOCK_TYPE == 8 && (defined _MSC_VER)
@@ -349,11 +350,6 @@ class CSharedList
         pthread_mutex_unlock(&csSharedList);
 #endif
         return !bEmpty;
-    }
-    std::unique_lock<mutex> move_mutex(mutex &m)
-    {
-        // 生成临时unique_lock对象，并调用unique_lock的移动构造函数
-        return std::unique_lock<mutex>(m);
     }
 };
 list<int> CSharedList::NumList;
@@ -419,11 +415,7 @@ class CSingleton
         if (nullptr == pSingleton)
         {
             std::unique_lock<mutex> unique_lockCreation(mutexCreation);
-            if (nullptr == pSingleton)
-            {
-                pSingleton = new CSingleton();
-                static CFixMemLeak objFixMemLeak;
-            }
+            Creation();
         }
         return pSingleton;
     }
@@ -445,19 +437,25 @@ CSingleton *CSingleton::pSingleton = nullptr;
 mutex CSingleton::mutexCreation;
 std::once_flag CSingleton::once_flagCreation;
 
-void function_singleton()
-{
-    // CSingleton *pSingleton = CSingleton::getInstance();
-    CSingleton *pSingleton = CSingleton::getInstanceCallOnce();
-}
-
 void zthread::test_Singleton()
 {
+#define N_LOOP_5_1 1000
     cout << "5.1 Singleton\t Id " << get_id() << endl;
-    thread objThd1(function_singleton);
-    thread objThd2(function_singleton);
-    objThd1.join();
-    objThd2.join();
+    vector<thread> vThreads;
+    auto laGet = [] { CSingleton *pSingleton = CSingleton::getInstance(); };
+    auto laCallOnce = [] { CSingleton *pSingleton = CSingleton::getInstanceCallOnce(); };
+    for (size_t i = 0; i < N_LOOP_5_1; i++)
+    {
+        vThreads.push_back(thread(laGet));
+        thread p(laCallOnce);
+        vThreads.push_back(std::move(p));
+        thread p(laCallOnce);
+        vThreads.emplace_back(p);
+    }
+    for (auto it = vThreads.begin(); it != vThreads.end(); it++)
+    {
+        it->join();
+    }
     return;
 }
 
@@ -490,7 +488,8 @@ class CNumQueue
         for (;;)
         {
             std::unique_lock<mutex> uNumQueue(mtxNumQueue);
-            cvNumQueue.wait(uNumQueue, [this] { return !NumQueue.empty(); });
+            auto laEmpty = [] { return !NumQueue.empty(); };
+            cvNumQueue.wait(uNumQueue, laEmpty);
             cout << "6.1 ReadDone \t Addr\t" << this << "\tData\t" << NumQueue.front() << "\tId " << get_id() << endl;
             NumQueue.pop();
         }
